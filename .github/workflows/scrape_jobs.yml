@@ -1,0 +1,29 @@
+name: Search Process
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.13.5'
+    
+    - name: Setup
+      run: pip install selenium requests webdriver-manager
+    
+    - name: Run
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        JOB_TITLE: ${{ secrets.JOB_TITLE }}
+        JOB_LOCATIONS: ${{ secrets.JOB_LOCATIONS }}
+        DOMAIN_MAPPINGS: ${{ secrets.DOMAIN_MAPPINGS }}
+        MAX_JOBS_PER_LOCATION: ${{ secrets.MAX_JOBS_PER_LOCATION }}
+      run: python job_scraper.py
