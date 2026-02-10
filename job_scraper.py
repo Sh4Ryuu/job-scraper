@@ -1,7 +1,6 @@
 import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
@@ -10,7 +9,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
 from datetime import datetime
-import base64
+import urllib.parse
 
 # ============ ALL CONFIG FROM GITHUB SECRETS ============
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
@@ -41,9 +40,8 @@ print(f"Searching for: '{JOB_TITLE}'")
 def send_debug_screenshot(screenshot_b64, location, error_msg):
     """Send debug screenshot to Slack when scraping fails"""
     try:
-        # Create a simple message with the error
         message = {
-            "text": f"🔍 Debug Info for {location}",
+            "text": f" Debug Info for {location}",
             "blocks": [
                 {
                     "type": "section",
@@ -83,7 +81,7 @@ def send_to_slack(all_jobs_by_location, debug_info=None):
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🎯 {total_jobs} Jobs Found",
+                "text": f" {total_jobs} Jobs Found",
                 "emoji": True,
             },
         },
@@ -105,7 +103,7 @@ def send_to_slack(all_jobs_by_location, debug_info=None):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*📍 {location}* - {len(jobs)} jobs"
+                    "text": f"* {location}* - {len(jobs)} jobs"
                 }
             })
             
@@ -115,9 +113,9 @@ def send_to_slack(all_jobs_by_location, debug_info=None):
                 "text": {
                     "type": "mrkdwn",
                     "text": f"*{job_number}. {job['title']}*\n"
-                    f"🏢 {job['company']}\n"
-                    f"📍 {job['location']}\n"
-                    f"💰 {job['salary']}",
+                    f" {job['company']}\n"
+                    f" {job['location']}\n"
+                    f" {job['salary']}",
                 },
             }
 
@@ -144,9 +142,9 @@ def send_to_slack(all_jobs_by_location, debug_info=None):
     response = requests.post(SLACK_WEBHOOK_URL, json=message)
 
     if response.status_code == 200:
-        print(f"✅ Notification sent: {total_jobs} jobs")
+        print(f" Notification sent: {total_jobs} jobs")
     else:
-        print(f"❌ Notification failed: {response.status_code}")
+        print(f" Notification failed: {response.status_code}")
 
 
 # ============ CORE FUNCTIONS ============
@@ -159,14 +157,25 @@ def get_domain(location):
     return "www.indeed.com"
 
 
+def build_search_url(domain, job_title, location):
+    """Build Indeed search URL directly"""
+    # URL encode the parameters
+    q = urllib.parse.quote_plus(job_title)
+    l = urllib.parse.quote_plus(location)
+    
+    # Build URL in Indeed's format
+    url = f"https://{domain}/jobs?q={q}&l={l}&sort=date&fromage=7"
+    return url
+
+
 def scrape_location(location):
-    """Execute search with improved error handling"""
+    """Execute search by directly navigating to search results URL"""
     print(f"\n{'='*50}")
     print(f"Processing: {location}")
     print(f"{'='*50}")
 
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new")  # Updated headless mode
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -174,245 +183,234 @@ def scrape_location(location):
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # More realistic user agent
     chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
+    
+    # Additional stealth options
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument("--lang=en-US,en;q=0.9")
 
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()), 
         options=chrome_options
     )
     
-    # Remove webdriver property
+    # Advanced bot detection avoidance
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+        "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    })
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+    driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
 
     results = []
     debug_messages = []
 
     try:
         domain = get_domain(location)
-        url = f"https://{domain}"
-        print(f"  🌐 Domain: {domain}")
-        print(f"  🔍 Searching for: '{JOB_TITLE}'")
-        print(f"  📍 Location: '{location}'")
+        # Build the search URL directly
+        url = build_search_url(domain, JOB_TITLE, location)
         
+        print(f"   Domain: {domain}")
+        print(f"   Searching for: '{JOB_TITLE}'")
+        print(f"   Location: '{location}'")
+        print(f"   URL: {url}")
+        
+        # Navigate directly to search results
         driver.get(url)
-        time.sleep(3)  # Increased wait time
+        
+        print(f"   Waiting for results to load...")
+        time.sleep(5)
 
-        try:
-            # Try to find the search inputs with wait
-            wait = WebDriverWait(driver, 10)
-            
-            # Try multiple possible selectors for the "what" field
-            what_selectors = [
-                "text-input-what",
-                "what",
-                "job-search-bar-keywords"
-            ]
-            
-            search_input = None
-            for selector in what_selectors:
-                try:
-                    search_input = wait.until(
-                        EC.presence_of_element_located((By.ID, selector))
-                    )
-                    print(f"  ✅ Found search input with ID: {selector}")
-                    break
-                except:
-                    continue
-            
-            if not search_input:
-                debug_messages.append("❌ Could not find job title search input")
-                raise Exception("Search input not found")
-            
-            search_input.clear()
-            search_input.send_keys(JOB_TITLE)
-            time.sleep(1)
-
-            # Try multiple possible selectors for the "where" field
-            where_selectors = [
-                "text-input-where",
-                "where",
-                "job-search-bar-location"
-            ]
-            
-            location_input = None
-            for selector in where_selectors:
-                try:
-                    location_input = driver.find_element(By.ID, selector)
-                    print(f"  ✅ Found location input with ID: {selector}")
-                    break
-                except:
-                    continue
-                    
-            if not location_input:
-                debug_messages.append("❌ Could not find location search input")
-                raise Exception("Location input not found")
-                
-            location_input.clear()
-            location_input.send_keys(location)
-            time.sleep(1)
-            location_input.send_keys(Keys.RETURN)
-            
-            print(f"  ⏳ Waiting for results to load...")
-            time.sleep(6)  # Increased wait for results
-
-            # Take screenshot for debugging
-            screenshot = driver.get_screenshot_as_base64()
-            current_url = driver.current_url
-            print(f"  📸 Current URL: {current_url}")
-
-        except Exception as e:
-            error_msg = f"Search failed: {str(e)}"
-            debug_messages.append(error_msg)
-            print(f"  ❌ {error_msg}")
+        # Take screenshot for debugging
+        current_url = driver.current_url
+        print(f"   Current URL: {current_url}")
+        
+        # Check if we got redirected or blocked
+        if "showcaptcha" in current_url.lower() or "blocked" in current_url.lower():
+            debug_messages.append(" Bot detection triggered - captcha or block page")
             screenshot = driver.get_screenshot_as_base64()
             send_debug_screenshot(screenshot, location, "\n".join(debug_messages))
             driver.quit()
             return results
 
         try:
-            # Try multiple selectors for job cards
+            # Wait for job listings to appear
+            wait = WebDriverWait(driver, 10)
+            
+            # Try multiple selectors for job cards (updated for 2024/2025 Indeed layout)
             job_card_selectors = [
+                "css-ehf62e.eu4oa1w0",  # New Indeed class
                 "job_seen_beacon",
-                "jobsearch-ResultsList",
-                "slider_container",
-                "job_card",
-                "cardOutline"
+                "cardOutline",
+                "slider_item",
+                "resultContent"
             ]
             
             cards = []
             selector_used = None
             
+            # First try class-based selectors
             for selector in job_card_selectors:
                 try:
                     cards = driver.find_elements(By.CLASS_NAME, selector)
-                    if cards:
+                    if cards and len(cards) > 0:
                         selector_used = selector
-                        print(f"  ✅ Found {len(cards)} elements with class: {selector}")
+                        print(f"   Found {len(cards)} elements with class: {selector}")
                         break
                 except:
                     continue
             
+            # Try CSS selectors as fallback
             if not cards:
-                # Try CSS selector as fallback
-                try:
-                    cards = driver.find_elements(By.CSS_SELECTOR, "[data-jk]")
-                    if cards:
-                        selector_used = "data-jk attribute"
-                        print(f"  ✅ Found {len(cards)} job cards using data-jk attribute")
-                except:
-                    pass
+                css_selectors = [
+                    "li[data-jk]",
+                    "div.job_seen_beacon",
+                    "div[data-jk]",
+                    ".cardOutline",
+                    "td.resultContent"
+                ]
+                
+                for selector in css_selectors:
+                    try:
+                        cards = driver.find_elements(By.CSS_SELECTOR, selector)
+                        if cards and len(cards) > 0:
+                            selector_used = selector
+                            print(f"   Found {len(cards)} job cards using CSS selector: {selector}")
+                            break
+                    except:
+                        continue
             
             if not cards:
                 error_msg = "No job cards found on page"
-                debug_messages.append(f"❌ {error_msg}")
+                debug_messages.append(f" {error_msg}")
                 debug_messages.append(f"Page title: {driver.title}")
                 debug_messages.append(f"URL: {driver.current_url}")
-                print(f"  ❌ {error_msg}")
+                
+                # Check if there's a "no results" message
+                try:
+                    no_results = driver.find_elements(By.CSS_SELECTOR, ".jobsearch-NoResult-messageHeader")
+                    if no_results:
+                        debug_messages.append(" Indeed shows 'No jobs found' message")
+                except:
+                    pass
+                
+                print(f"   {error_msg}")
                 screenshot = driver.get_screenshot_as_base64()
                 send_debug_screenshot(screenshot, location, "\n".join(debug_messages))
                 driver.quit()
                 return results
 
-            print(f"  📋 Processing up to {MAX_JOBS_PER_LOCATION} jobs...")
+            print(f"   Processing up to {MAX_JOBS_PER_LOCATION} jobs...")
             
             for idx, card in enumerate(cards[:MAX_JOBS_PER_LOCATION], 1):
                 try:
-                    # Try multiple selectors for job title
+                    # Extract job title
                     title = None
                     title_selectors = [
-                        "h2.jobTitle span",
+                        "h2.jobTitle span[title]",
+                        "h2.jobTitle a span",
                         "h2.jobTitle",
-                        ".jobTitle",
-                        "[data-testid='job-title']",
-                        "a[data-jk] span"
+                        "a.jcs-JobTitle span",
+                        ".jobTitle span",
+                        "h2 span[title]"
                     ]
                     
                     for selector in title_selectors:
                         try:
                             title_elem = card.find_element(By.CSS_SELECTOR, selector)
-                            title = title_elem.text
-                            if title:
+                            title = title_elem.get_attribute("title") or title_elem.text
+                            if title and title.strip():
                                 break
                         except:
                             continue
                     
-                    if not title:
+                    if not title or not title.strip():
+                        print(f"    ✗ Job {idx}: No title found, skipping")
                         continue
 
-                    # Try multiple selectors for company
+                    # Extract company
                     company = "Not listed"
                     company_selectors = [
                         "[data-testid='company-name']",
+                        "span.companyName",
                         ".companyName",
-                        "span.companyName"
+                        "span[data-testid='company-name']"
                     ]
                     
                     for selector in company_selectors:
                         try:
-                            company = card.find_element(By.CSS_SELECTOR, selector).text
-                            if company:
+                            company_elem = card.find_element(By.CSS_SELECTOR, selector)
+                            company = company_elem.text
+                            if company and company.strip():
                                 break
                         except:
                             continue
 
-                    # Try multiple selectors for location
+                    # Extract location
                     job_location = location
                     location_selectors = [
                         "[data-testid='text-location']",
+                        "div.companyLocation",
                         ".companyLocation",
-                        "div.companyLocation"
+                        "div[data-testid='text-location']"
                     ]
                     
                     for selector in location_selectors:
                         try:
-                            job_location = card.find_element(By.CSS_SELECTOR, selector).text
-                            if job_location:
+                            loc_elem = card.find_element(By.CSS_SELECTOR, selector)
+                            job_location = loc_elem.text
+                            if job_location and job_location.strip():
                                 break
                         except:
                             continue
 
-                    # Get job link
+                    # Extract job link and ID
                     link = None
                     try:
-                        link_element = card.find_element(By.CSS_SELECTOR, "h2.jobTitle a")
-                        job_id = link_element.get_attribute("data-jk")
+                        # Try to get job ID from the card itself
+                        job_id = card.get_attribute("data-jk")
+                        if not job_id:
+                            # Try from the link element
+                            link_elem = card.find_element(By.CSS_SELECTOR, "h2.jobTitle a, a.jcs-JobTitle")
+                            job_id = link_elem.get_attribute("data-jk")
+                        
                         if job_id:
                             link = f"https://{domain}/viewjob?jk={job_id}"
                     except:
-                        try:
-                            job_id = card.get_attribute("data-jk")
-                            if job_id:
-                                link = f"https://{domain}/viewjob?jk={job_id}"
-                        except:
-                            pass
+                        pass
 
-                    # Get salary
+                    # Extract salary
                     salary = "Not listed"
                     salary_selectors = [
                         "[data-testid='attribute_snippet_testid']",
+                        ".salary-snippet-container",
                         ".salary-snippet",
-                        ".salaryText"
+                        "div.salary-snippet",
+                        ".metadata.salary-snippet-container"
                     ]
                     
                     for selector in salary_selectors:
                         try:
-                            salary = card.find_element(By.CSS_SELECTOR, selector).text
-                            if salary:
+                            salary_elem = card.find_element(By.CSS_SELECTOR, selector)
+                            salary = salary_elem.text
+                            if salary and salary.strip():
                                 break
                         except:
                             continue
 
-                    results.append(
-                        {
-                            "title": title,
-                            "company": company,
-                            "location": job_location,
-                            "salary": salary,
-                            "link": link,
-                        }
-                    )
+                    results.append({
+                        "title": title.strip(),
+                        "company": company.strip(),
+                        "location": job_location.strip(),
+                        "salary": salary.strip(),
+                        "link": link,
+                    })
                     
                     print(f"    ✓ Job {idx}: {title[:50]}...")
 
@@ -420,19 +418,19 @@ def scrape_location(location):
                     print(f"    ✗ Job {idx}: Failed to parse ({str(e)})")
                     continue
 
-            print(f"  ✅ Successfully scraped {len(results)} jobs")
+            print(f"   Successfully scraped {len(results)} jobs")
 
         except Exception as e:
             error_msg = f"Failed to parse results: {str(e)}"
-            debug_messages.append(f"❌ {error_msg}")
-            print(f"  ❌ {error_msg}")
+            debug_messages.append(f" {error_msg}")
+            print(f"   {error_msg}")
             screenshot = driver.get_screenshot_as_base64()
             send_debug_screenshot(screenshot, location, "\n".join(debug_messages))
 
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
-        debug_messages.append(f"❌ {error_msg}")
-        print(f"  ❌ {error_msg}")
+        debug_messages.append(f" {error_msg}")
+        print(f"   {error_msg}")
         try:
             screenshot = driver.get_screenshot_as_base64()
             send_debug_screenshot(screenshot, location, "\n".join(debug_messages))
@@ -448,7 +446,7 @@ def scrape_location(location):
 # ============ MAIN ============
 def main():
     print("\n" + "="*60)
-    print("🚀 STARTING JOB SEARCH PROCESS")
+    print(" STARTING JOB SEARCH PROCESS")
     print("="*60)
 
     all_results = {}
@@ -459,16 +457,18 @@ def main():
         results = scrape_location(location)
         all_results[location] = results
         
+        # Add random delay between requests to avoid rate limiting
         if idx < len(LOCATIONS):
-            wait_time = 5
-            print(f"  ⏳ Waiting {wait_time}s before next location...")
+            import random
+            wait_time = random.uniform(3, 7)
+            print(f"   Waiting {wait_time:.1f}s before next location...")
             time.sleep(wait_time)
 
     total_time = time.time() - total_start
     total = sum(len(r) for r in all_results.values())
     
     print("\n" + "="*60)
-    print(f"📊 FINAL RESULTS")
+    print(f" FINAL RESULTS")
     print("="*60)
     print(f"Total jobs found: {total}")
     print(f"Total time: {total_time:.1f}s")
@@ -483,7 +483,7 @@ def main():
     
     send_to_slack(all_results, debug_info)
 
-    print("\n✅ Process completed")
+    print("\n Process completed")
 
 
 if __name__ == "__main__":
